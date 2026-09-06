@@ -349,6 +349,8 @@ client_auth_kind CSSE3Authorizer::authorize(authdata_t* authdata)
 		MAX_DATA_SIZE = 0x800,
 		PENDING_ID = 1234,
 		TIME_TOLERANCE = 57600, // +-16 hours of clock skew between client and server is tolerated
+		SSE3_KEY_LEN = 16,
+		SSE3_BLOCK_SIZE = 16,
 	};
 
 	struct SSE3Ticket_t
@@ -356,10 +358,10 @@ client_auth_kind CSSE3Authorizer::authorize(authdata_t* authdata)
 		uint32_t Header;		// +0,  'UMEH'
 		int32_t Method;			// +4,  ticket format revision, dproto/reunion just want it to be >= MIN_METHOD
 		uint32_t IpAddr;		// +8,  client's external IP
-		uint32_t Magic;			// +12, ' ESS', plaintext copy of the tag checked below
+		uint32_t Unk0C;			// +12
 		uint32_t Unk10;			// +16
 		uint32_t Unk14;			// +20
-		uint64_t KeyMaterial;	// +24, client-chosen seed; SHA256(KeyMaterial) is the AES key for the encrypted part below
+		uint64_t KeyMaterial;	// +24, client-chosen seed; first 16 bytes of SHA256(KeyMaterial) is the AES-128 key below
 		uint32_t Unk20;			// +32
 		uint32_t Unk24;			// +36
 		uint32_t Unk28;			// +40
@@ -367,9 +369,9 @@ client_auth_kind CSSE3Authorizer::authorize(authdata_t* authdata)
 		CSteamID SteamID;		// +48, plaintext copy of the SteamID
 		uint32_t DataLen;		// +56, length of the encrypted part below, must be DATA_SIZE
 
-		// Encrypted with Rijndael-256/CBC using SHA256(KeyMaterial) as the key
+		// Encrypted with a modified-Rijndael AES-128/CBC (zero IV) using SHA256(KeyMaterial)[0:16] as the key
 		uint32_t Random;		// +60
-		uint32_t Magic2;		// +64, must decrypt to MAGIC
+		uint32_t Magic;			// +64, must decrypt to MAGIC
 		CSteamID EncSteamID;	// +68, must match the plaintext SteamID above
 		uint32_t IpAddr2;		// +76, must match either the connecting IP or a private/loopback range
 		uint32_t Unused;		// +80
@@ -400,11 +402,11 @@ client_auth_kind CSSE3Authorizer::authorize(authdata_t* authdata)
 	int shaLen;
 	const char *cDigest = hSha.RawHash(shaLen);
 
-	CRijndael hCrypt;
-	hCrypt.MakeKey(cDigest, CRijndael::sm_chain0, REVEMU_KEY_LEN, REVEMU_BLOCK_SIZE);
+	CRijndaelChanged hCrypt;
+	hCrypt.MakeKey(cDigest, CRijndaelChanged::sm_chain0, SSE3_KEY_LEN, SSE3_BLOCK_SIZE);
 
 	uint32_t decrypted[DATA_SIZE / sizeof(uint32_t)];
-	if (!hCrypt.DecryptBlock((char *)&ticket->Random, (char *)decrypted)) {
+	if (!hCrypt.Decrypt((char *)&ticket->Random, (char *)decrypted, DATA_SIZE, CRijndaelChanged::CBC)) {
 		return CA_UNKNOWN;
 	}
 
